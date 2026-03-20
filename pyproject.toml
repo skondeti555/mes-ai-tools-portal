@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "mes-tools-api"
+version = "1.0.0"
+description = "MES Tools Portal - Python API for RFQ report generation"
+authors = []
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = ">=0.104.0"
+pandas = ">=2.0"
+openpyxl = ">=3.1"
+python-multipart = ">=0.0.6"
+uvicorn = ">=0.24.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0"
+pytest-cov = ">=5.0"
+httpx = ">=0.25.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

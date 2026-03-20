@@ -1,0 +1,49 @@
+# Confidential data files
+RFQ_Finished Component*.xlsx
+OpenRFQ.csv
+Quoted_RFQs_Export.csv
+China.xlsx
+India.xlsx
+Mexico.xlsx
+Vietnam.xlsx
+Open RFQ Report*.xlsx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+.next/
+out/
+
+# Environment
+.env
+.env.*
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Legacy Electron (removed)
+rfq-app/
+*.bat
+*.vbs
+
+# Uploaded/generated files (runtime)
+uploads/
+generated/
+tmp/
+.claude/

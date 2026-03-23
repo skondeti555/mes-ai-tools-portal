@@ -77,11 +77,13 @@ COUNTRY_MAP = {
     "Vietnam": "VN",
 }
 
+REPORT_TEMPLATE = "Open_RFQ_Report_Template.xlsx"
+
 COUNTRIES = {
-    "India":   {"report": "India.xlsx",   "template": "Mexico_Template.xlsx"},
-    "China":   {"report": "China.xlsx",   "template": "Mexico_Template.xlsx"},
-    "Mexico":  {"report": "Mexico.xlsx",  "template": "Mexico_Template.xlsx"},
-    "Vietnam": {"report": "Vietnam.xlsx", "template": "Mexico_Template.xlsx"},
+    "India":   {"report": "India.xlsx",   "template": REPORT_TEMPLATE},
+    "China":   {"report": "China.xlsx",   "template": REPORT_TEMPLATE},
+    "Mexico":  {"report": "Mexico.xlsx",  "template": REPORT_TEMPLATE},
+    "Vietnam": {"report": "Vietnam.xlsx", "template": REPORT_TEMPLATE},
 }
 NEED_BY_COL = "Need By Date"
 HEADER_SCAN_ROWS = 80

@@ -30,14 +30,22 @@ const NARROW_COLS = new Set([
   "invited supplier count",
 ]);
 
+// Convert an Excel serial date number to a real JS Date.
+// Returns null when the value isn't a serial date (so callers can fall back to raw text).
+function excelSerialToDate(val: string | number): Date | null {
+  if (val === "" || val === undefined || val === null) return null;
+  const num = Number(val);
+  if (isNaN(num) || num < 1000) return null; // not a serial date
+  // Excel serial date: days since 1899-12-30
+  const epoch = new Date(1899, 11, 30);
+  return new Date(epoch.getTime() + num * 86400000);
+}
+
 // Convert Excel serial date number to formatted date string
 function excelDateToString(val: string | number): string {
   if (val === "" || val === undefined || val === null) return "";
-  const num = Number(val);
-  if (isNaN(num) || num < 1000) return String(val); // not a serial date
-  // Excel serial date: days since 1899-12-30
-  const epoch = new Date(1899, 11, 30);
-  const date = new Date(epoch.getTime() + num * 86400000);
+  const date = excelSerialToDate(val);
+  if (!date) return String(val); // not a serial date
   return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
@@ -195,6 +203,93 @@ export default function QuotedRfqsPage() {
     input.click();
   }, [handleFile]);
 
+  const exportToExcel = useCallback(async () => {
+    if (rows.length === 0) return;
+    // Dynamic import keeps the heavy exceljs bundle out of the initial page load
+    // and avoids any SSR bundling issues.
+    const ExcelJS = (await import("exceljs")).default;
+    const workbook = new ExcelJS.Workbook();
+    const ws = workbook.addWorksheet("Quoted RFQs");
+
+    const thinBorder = {
+      top: { style: "thin" as const, color: { argb: "FFB0B0B0" } },
+      left: { style: "thin" as const, color: { argb: "FFB0B0B0" } },
+      bottom: { style: "thin" as const, color: { argb: "FFB0B0B0" } },
+      right: { style: "thin" as const, color: { argb: "FFB0B0B0" } },
+    };
+
+    // Header row — bold white text on MES red, centered
+    const headerRow = ws.addRow(headers);
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFE63946" },
+      };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.border = thinBorder;
+    });
+
+    // Data rows
+    rows.forEach((row) => {
+      const values = headers.map((h) => {
+        const raw = row[h] ?? "";
+        if (h.toLowerCase().includes("date")) {
+          return excelSerialToDate(raw) ?? raw;
+        }
+        return raw;
+      });
+      const dataRow = ws.addRow(values);
+      dataRow.eachCell((cell, colNumber) => {
+        const header = headers[colNumber - 1];
+        cell.border = thinBorder;
+        if (header?.toLowerCase().includes("date") && cell.value instanceof Date) {
+          cell.numFmt = "mmm d, yyyy";
+          cell.alignment = { horizontal: "center" };
+        } else if (NARROW_COLS.has(header?.toLowerCase() ?? "")) {
+          cell.alignment = { horizontal: "center" };
+        }
+      });
+    });
+
+    // Freeze the header row
+    ws.views = [{ state: "frozen", ySplit: 1 }];
+
+    // Auto-fit column widths from header + cell content (clamped)
+    ws.columns.forEach((col, i) => {
+      const header = headers[i] ?? "";
+      let maxLen = header.length;
+      rows.forEach((row) => {
+        const raw = row[header] ?? "";
+        const text = header.toLowerCase().includes("date")
+          ? excelDateToString(raw)
+          : String(raw);
+        if (text.length > maxLen) maxLen = text.length;
+      });
+      col.width = Math.min(Math.max(maxLen + 2, 10), 50);
+    });
+
+    // Autofilter over the full header range
+    ws.autoFilter = {
+      from: { row: 1, column: 1 },
+      to: { row: 1, column: headers.length },
+    };
+
+    const buf = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buf], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
+    const now = new Date();
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Quoted_RFQs_${stamp}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [headers, rows]);
+
   return (
     <div className="max-w-[1100px] mx-auto">
       {/* Back navigation */}
@@ -318,7 +413,7 @@ export default function QuotedRfqsPage() {
       {/* Results Table */}
       {rows.length > 0 && (
         <section className="bg-card border border-border rounded-[10px] p-5 mb-4">
-          <div className="flex items-center gap-3 mb-4">
+          <div className="flex flex-wrap items-center gap-3 mb-4">
             <span className="inline-flex items-center justify-center w-7 h-7 bg-accent-red text-white rounded-full text-sm font-bold">
               2
             </span>
@@ -329,9 +424,32 @@ export default function QuotedRfqsPage() {
               <strong className="text-accent-teal">{rows.length}</strong> out of{" "}
               {totalRows} open RFQs have quotes received
             </span>
+            <button
+              type="button"
+              onClick={exportToExcel}
+              className="inline-flex items-center gap-2 bg-accent-red hover:bg-accent-red-hover text-white text-sm font-semibold px-3 py-1.5 rounded-md transition-colors"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M8 1v9m0 0L5 7m3 3l3-3"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              Export to Excel
+            </button>
           </div>
 
-          <div className="overflow-x-auto rounded-lg border border-border">
+          <div className="overflow-x-auto rounded-lg border border-gray-300 bg-white">
             <table className="w-full text-sm text-left table-fixed">
               <colgroup>
                 {headers.map((h) => (
@@ -354,11 +472,11 @@ export default function QuotedRfqsPage() {
                 ))}
               </colgroup>
               <thead>
-                <tr className="bg-dark border-b border-border">
+                <tr className="bg-gray-100 border-b border-gray-300">
                   {headers.map((h) => (
                     <th
                       key={h}
-                      className={`px-2 py-2 text-text-secondary font-semibold text-xs uppercase tracking-wider ${
+                      className={`px-2 py-2 text-gray-700 font-semibold text-xs uppercase tracking-wider ${
                         NARROW_COLS.has(h.toLowerCase()) ? "text-center" : ""
                       }`}
                     >
@@ -371,7 +489,9 @@ export default function QuotedRfqsPage() {
                 {rows.map((row, i) => (
                   <tr
                     key={i}
-                    className="border-b border-border hover:bg-card-hover transition-colors"
+                    className={`border-b border-gray-200 hover:bg-gray-100 transition-colors ${
+                      i % 2 === 1 ? "bg-gray-50" : "bg-white"
+                    }`}
                   >
                     {headers.map((h) => {
                       const isDate = h.toLowerCase().includes("date");
@@ -381,7 +501,7 @@ export default function QuotedRfqsPage() {
                       return (
                         <td
                           key={h}
-                          className={`px-2 py-2 text-text-primary text-wrap break-words ${
+                          className={`px-2 py-2 text-gray-900 text-wrap break-words ${
                             isNarrow ? "text-center" : ""
                           }`}
                         >

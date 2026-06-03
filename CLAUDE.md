@@ -1,13 +1,22 @@
 # MES Tools Portal
 
 ## Project Overview
-Multi-tool web portal for MES Estimating Department. Currently hosts the **RFQ Report Generator** and **Quoted RFQs Report**; additional tools will be added over time. One URL, all tools.
+Multi-tool web portal for MES Estimating Department. Currently hosts the **RFQ Report Generator** (backend-powered) and **Quoted RFQs Report** (client-side only); additional tools will be added over time. **Mexico Bar Stock Cost Calculator** is defined as a placeholder (coming soon). One URL, all tools.
 
 ## Architecture
 - **Frontend:** Next.js 15 (App Router) + Tailwind CSS v4, in `frontend/`
 - **Backend:** Python FastAPI serverless functions in `api/`, deployed to Vercel
 - **No database** — stateless file processing (upload → process → download ZIP)
 - **Templates:** Single Excel template in `templates/Open_RFQ_Report_Template.xlsx` (formatting, logo, frozen panes — no real data)
+- **Legacy:** `rfq-app/` contains a deprecated Electron desktop app (gitignored, not deployed). `docs/ARCHITECTURE-v1-electron.md` documents the old Electron design.
+
+## Current Tools
+
+| Tool | Route | Backend? | Description |
+|------|-------|----------|-------------|
+| RFQ Report Generator | `/rfq-report` | Yes (`POST /api/rfq_generate`) | Upload Excel → 3-step ETL pipeline → download ZIP of country reports |
+| Quoted RFQs Report | `/quoted-rfqs` | No (client-side `xlsx` + `exceljs`) | Upload Excel/CSV → filters rows with quoted suppliers → displays a light/printable (white) results table → one-click styled Excel export (`exceljs`) |
+| Mexico Bar Stock Cost Calculator | `#` (placeholder) | TBD | Coming soon (`available: false` in tool grid) |
 
 ## Monorepo Structure & Deployment
 This is a monorepo with `frontend/` (Next.js) and `api/` (Python) at the root.
@@ -34,6 +43,7 @@ cd frontend
 npm install
 npm run dev   # runs on http://localhost:3000
 ```
+Note: `frontend/next.config.ts` rewrites `/api/*` to `http://localhost:8000` during dev so the frontend can reach the local Python server. This rewrite is ignored on Vercel (serverless functions handle `/api/*` natively).
 
 ### Full stack with Vercel CLI
 ```bash
@@ -48,12 +58,20 @@ vercel dev    # runs both frontend + Python API functions
 - `api/lib/config.py` — Template paths configuration
 - `api/requirements.txt` — Python dependencies for Vercel (must include Pillow for image/logo support)
 - `templates/Open_RFQ_Report_Template.xlsx` — Shared Excel template with logo and frozen panes (used for all countries)
-- `frontend/src/app/page.tsx` — Portal landing page (tool grid)
+- `frontend/package.json` — Frontend dependencies (`xlsx` for client-side Excel parsing; `exceljs` for client-side styled Excel export on the Quoted RFQs page)
+- `frontend/next.config.ts` — Next.js config with dev-only API rewrite to localhost:8000
+- `frontend/src/app/page.tsx` — Portal landing page (tool grid, 3 tools defined)
+- `frontend/src/app/layout.tsx` — Root layout (header, MES branding, dark theme)
 - `frontend/src/app/rfq-report/page.tsx` — RFQ Report Generator tool page
-- `frontend/src/app/quoted-rfqs/page.tsx` — Quoted RFQs Report tool page
+- `frontend/src/app/quoted-rfqs/page.tsx` — Quoted RFQs Report tool page (client-side only, no backend call)
 - `tests/` — Python test suite (test_helpers, test_pipeline, test_template_helpers)
 - `package.json` (root) — Vercel framework detection shim (not the real frontend package.json)
 - `vercel.json` — Vercel build/routing config
+- `docs/ARCHITECTURE-v1-electron.md` — Legacy Electron architecture doc (historical reference)
+
+## Business Rules
+- **Mexico supplier exclusion:** Step 2 of the pipeline drops Mexico rows where `_InvitedSupplier` contains "Metrics Works Saltillo" (case-insensitive). This is hard-coded in `api/lib/rfq_pipeline.py`.
+- **Country mapping:** 4 countries — India (IN), China (CN), Mexico (MX), Vietnam (VN) — defined in `COUNTRY_MAP` in `api/lib/rfq_pipeline.py`.
 
 ## Template Notes
 - All countries share a single template: `templates/Open_RFQ_Report_Template.xlsx` (logo in top-left, frozen panes at H1).
@@ -62,10 +80,10 @@ vercel dev    # runs both frontend + Python API functions
 - The `COUNTRIES` dict in `api/lib/rfq_pipeline.py` maps each country to its report and template files.
 
 ## Adding a New Tool
-1. Create a new FastAPI endpoint in `api/` (e.g., `api/newtool.py`)
-2. Create a new route directory in `frontend/src/app/<tool-name>/page.tsx`
-3. Add a ToolCard entry in the tools array in `frontend/src/app/page.tsx`
-4. Change `available: false` to `available: true` and set the correct `href`
+1. **Backend (if needed):** Create a new FastAPI endpoint in `api/` (e.g., `api/newtool.py`). Not all tools need a backend — Quoted RFQs is 100% client-side using the `xlsx` library.
+2. **Frontend route:** Create `frontend/src/app/<tool-name>/page.tsx`
+3. **Portal entry:** Add a ToolCard entry in the tools array in `frontend/src/app/page.tsx`
+4. **Enable:** Change `available: false` to `available: true` and set the correct `href`
 
 ## Data Sensitivity
 **This is a PUBLIC repo.** Never commit:

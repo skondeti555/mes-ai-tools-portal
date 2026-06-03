@@ -47,3 +47,5 @@ uploads/
 generated/
 tmp/
 .claude/
+
+.vercel

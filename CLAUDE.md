@@ -6,7 +6,7 @@ Multi-tool web portal for MES Estimating Department. Currently hosts the **RFQ R
 ## Architecture
 - **Frontend:** Next.js 15 (App Router) + Tailwind CSS v4, in `frontend/`
 - **Backend:** Python FastAPI serverless functions in `api/`, deployed to Vercel
-- **No database** — stateless file processing (upload → process → download ZIP)
+- **Mostly stateless** — file processing is upload → process → download (no DB). The one exception is **per-RFQ comments** on the Quoted RFQs page, persisted in **Upstash Redis** (a single hash) via `POST/GET /api/rfq_comments`.
 - **Templates:** Single Excel template in `templates/Open_RFQ_Report_Template.xlsx` (formatting, logo, frozen panes — no real data)
 - **Legacy:** `rfq-app/` contains a deprecated Electron desktop app (gitignored, not deployed). `docs/ARCHITECTURE-v1-electron.md` documents the old Electron design.
 
@@ -15,7 +15,7 @@ Multi-tool web portal for MES Estimating Department. Currently hosts the **RFQ R
 | Tool | Route | Backend? | Description |
 |------|-------|----------|-------------|
 | RFQ Report Generator | `/rfq-report` | Yes (`POST /api/rfq_generate`) | Upload Excel → 3-step ETL pipeline → download ZIP of country reports |
-| Quoted RFQs Report | `/quoted-rfqs` | No (client-side `xlsx` + `exceljs`) | Upload Excel/CSV → filters rows with quoted suppliers → displays a light/printable (white) results table → one-click styled Excel export (`exceljs`) |
+| Quoted RFQs Report | `/quoted-rfqs` | Parsing/export client-side (`xlsx` + `exceljs`); comments via `GET/POST /api/rfq_comments` | Upload Excel/CSV → filters rows with quoted suppliers → light/printable results table → styled Excel export. Each row has a persistent **Comment** column (team-shared, keyed by `RFQ #`, stored in Upstash Redis) gated behind a shared access code. |
 | Mexico Bar Stock Cost Calculator | `#` (placeholder) | TBD | Coming soon (`available: false` in tool grid) |
 
 ## Monorepo Structure & Deployment
@@ -26,7 +26,10 @@ This is a monorepo with `frontend/` (Next.js) and `api/` (Python) at the root.
 - **Vercel dashboard:** Framework Preset = Next.js. No Build/Install/Output overrides — defaults work via root `package.json` scripts.
 - **Python API functions:** Vercel auto-detects `api/*.py` as serverless functions. Dependencies listed in `api/requirements.txt`.
 - Push to GitHub → Vercel auto-deploys frontend + Python API functions.
-- No environment variables needed (API is same-origin `/api/*`).
+- **Environment variables (only for the Quoted RFQs comments feature):**
+  - `RFQ_COMMENTS_ACCESS_CODE` — shared code users type to view/edit comments. Server-side only; **never** prefix with `NEXT_PUBLIC_` (it must not ship to the browser).
+  - Upstash Redis creds, auto-injected by the Vercel **Marketplace → Upstash for Redis** integration: `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (the `KV_REST_API_URL` / `KV_REST_API_TOKEN` aliases also work).
+  - If these are unset the rest of the portal still works; the comments column simply stays empty/locked.
 
 ## Local Development
 
@@ -55,6 +58,7 @@ vercel dev    # runs both frontend + Python API functions
 - `api/lib/rfq_pipeline.py` — Core ETL logic (3-step pipeline: build CSV → split by country → format templates)
 - `api/rfq_generate.py` — POST /api/rfq_generate endpoint (upload xlsx → returns ZIP)
 - `api/rfq_health.py` — GET /api/rfq_health endpoint (health check)
+- `api/rfq_comments.py` — GET/POST /api/rfq_comments (Quoted RFQs per-RFQ comments in Upstash Redis; access-code gated)
 - `api/lib/config.py` — Template paths configuration
 - `api/requirements.txt` — Python dependencies for Vercel (must include Pillow for image/logo support)
 - `templates/Open_RFQ_Report_Template.xlsx` — Shared Excel template with logo and frozen panes (used for all countries)

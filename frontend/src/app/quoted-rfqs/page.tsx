@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
 
@@ -10,6 +10,11 @@ interface RowData {
 
 const QUOTED_COL = "Quoted Supplier Count";
 const HEADER_SCAN_ROWS = 80;
+
+// Synthetic column (not present in the uploaded sheet) holding the per-RFQ note.
+const COMMENT_COL = "Comment";
+// localStorage key for the shared access code so users don't re-enter it each visit.
+const ACCESS_CODE_KEY = "quotedRfqsAccessCode";
 
 // Columns to display (matching original Electron app) + Process
 const DISPLAY_COLS = [
@@ -82,6 +87,95 @@ export default function QuotedRfqsPage() {
   const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // Per-RFQ comments (RFQ # -> text), shared across the team via the backend.
+  const [comments, setComments] = useState<Record<string, string>>({});
+  const [accessCode, setAccessCode] = useState("");
+  const [codeInput, setCodeInput] = useState("");
+  const [commentsUnlocked, setCommentsUnlocked] = useState(false);
+  const [commentsError, setCommentsError] = useState("");
+
+  // The actual header name for the RFQ # column (casing comes from the sheet).
+  const rfqKey = headers.find((h) => h.toLowerCase() === "rfq #");
+
+  // Fetch all comments with the given code. Returns true on success (valid code).
+  const loadComments = useCallback(async (code: string): Promise<boolean> => {
+    setCommentsError("");
+    try {
+      const res = await fetch("/api/rfq_comments", {
+        headers: { "X-Access-Code": code },
+      });
+      if (res.status === 401) {
+        setCommentsError("Incorrect access code.");
+        return false;
+      }
+      if (!res.ok) {
+        setCommentsError("Could not load comments. Try again later.");
+        return false;
+      }
+      const data: Record<string, string> = await res.json();
+      setComments(data ?? {});
+      setCommentsUnlocked(true);
+      return true;
+    } catch {
+      setCommentsError("Could not reach the comments server.");
+      return false;
+    }
+  }, []);
+
+  // On mount, auto-unlock if a code was previously saved.
+  useEffect(() => {
+    const saved =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(ACCESS_CODE_KEY)
+        : null;
+    if (saved) {
+      setAccessCode(saved);
+      loadComments(saved);
+    }
+  }, [loadComments]);
+
+  const handleUnlock = useCallback(async () => {
+    const code = codeInput.trim();
+    if (!code) return;
+    const ok = await loadComments(code);
+    if (ok) {
+      setAccessCode(code);
+      window.localStorage.setItem(ACCESS_CODE_KEY, code);
+      setCodeInput("");
+    }
+  }, [codeInput, loadComments]);
+
+  // Persist a single comment (blank clears it). Optimistically updates local state.
+  const saveComment = useCallback(
+    async (rfqNumber: string, comment: string) => {
+      const key = String(rfqNumber);
+      setComments((prev) => {
+        const next = { ...prev };
+        if (comment.trim()) next[key] = comment;
+        else delete next[key];
+        return next;
+      });
+      try {
+        const res = await fetch("/api/rfq_comments", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Access-Code": accessCode,
+          },
+          body: JSON.stringify({ rfqNumber: key, comment }),
+        });
+        if (!res.ok) {
+          setCommentsError("Failed to save comment. Check your access code.");
+        } else {
+          setCommentsError("");
+        }
+      } catch {
+        setCommentsError("Failed to save comment — server unreachable.");
+      }
+    },
+    [accessCode]
+  );
+
   const parseFile = useCallback((f: File) => {
     setLoading(true);
     setErrorMsg("");
@@ -153,6 +247,8 @@ export default function QuotedRfqsPage() {
         const displayHeaders = availableDisplayCols.map(
           (col) => headerRow.find((h) => h.toLowerCase() === col.toLowerCase())!
         );
+        // Append the synthetic Comment column (not present in the uploaded sheet).
+        displayHeaders.push(COMMENT_COL);
 
         setHeaders(displayHeaders);
         setRows(filtered);
@@ -234,6 +330,9 @@ export default function QuotedRfqsPage() {
     // Data rows
     rows.forEach((row) => {
       const values = headers.map((h) => {
+        if (h === COMMENT_COL) {
+          return rfqKey ? comments[String(row[rfqKey] ?? "")] ?? "" : "";
+        }
         const raw = row[h] ?? "";
         if (h.toLowerCase().includes("date")) {
           return excelSerialToDate(raw) ?? raw;
@@ -261,10 +360,14 @@ export default function QuotedRfqsPage() {
       const header = headers[i] ?? "";
       let maxLen = header.length;
       rows.forEach((row) => {
-        const raw = row[header] ?? "";
-        const text = header.toLowerCase().includes("date")
-          ? excelDateToString(raw)
-          : String(raw);
+        let text: string;
+        if (header === COMMENT_COL) {
+          text = rfqKey ? comments[String(row[rfqKey] ?? "")] ?? "" : "";
+        } else if (header.toLowerCase().includes("date")) {
+          text = excelDateToString(row[header] ?? "");
+        } else {
+          text = String(row[header] ?? "");
+        }
         if (text.length > maxLen) maxLen = text.length;
       });
       col.width = Math.min(Math.max(maxLen + 2, 10), 50);
@@ -288,7 +391,7 @@ export default function QuotedRfqsPage() {
     a.download = `Quoted_RFQs_${stamp}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [headers, rows]);
+  }, [headers, rows, comments, rfqKey]);
 
   return (
     <div className="max-w-[1100px] mx-auto">
@@ -449,6 +552,41 @@ export default function QuotedRfqsPage() {
             </button>
           </div>
 
+          {/* Comments unlock / status bar */}
+          <div className="flex flex-wrap items-center gap-2 mb-3 text-sm">
+            {commentsUnlocked ? (
+              <span className="inline-flex items-center gap-1.5 text-accent-teal">
+                <span aria-hidden>🔓</span> Comments unlocked — click a note to edit
+              </span>
+            ) : (
+              <>
+                <span className="text-text-secondary">
+                  Enter the team access code to view &amp; edit comments:
+                </span>
+                <input
+                  type="password"
+                  value={codeInput}
+                  onChange={(e) => setCodeInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleUnlock();
+                  }}
+                  placeholder="Access code"
+                  className="rounded border border-border bg-dark px-2 py-1 text-sm text-text-primary focus:border-accent-red focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleUnlock}
+                  className="bg-accent-red hover:bg-accent-red-hover text-white text-sm font-semibold px-3 py-1 rounded-md transition-colors"
+                >
+                  Unlock
+                </button>
+              </>
+            )}
+            {commentsError && (
+              <span className="text-error">{commentsError}</span>
+            )}
+          </div>
+
           <div className="overflow-x-auto rounded-lg border border-gray-300 bg-white">
             <table className="w-full text-sm text-left table-fixed">
               <colgroup>
@@ -456,7 +594,9 @@ export default function QuotedRfqsPage() {
                   <col
                     key={h}
                     className={
-                      NARROW_COLS.has(h.toLowerCase())
+                      h === COMMENT_COL
+                        ? "w-[220px]"
+                        : NARROW_COLS.has(h.toLowerCase())
                         ? "w-[70px]"
                         : h.toLowerCase() === "rfq #"
                         ? "w-[95px]"
@@ -494,6 +634,32 @@ export default function QuotedRfqsPage() {
                     }`}
                   >
                     {headers.map((h) => {
+                      if (h === COMMENT_COL) {
+                        const rfqNo = rfqKey ? String(row[rfqKey] ?? "") : "";
+                        return (
+                          <td key={h} className="px-2 py-1.5 align-top">
+                            {commentsUnlocked ? (
+                              <textarea
+                                key={`${rfqNo}:${comments[rfqNo] ?? ""}`}
+                                rows={2}
+                                defaultValue={comments[rfqNo] ?? ""}
+                                placeholder="Add a note…"
+                                onBlur={(e) => {
+                                  const val = e.target.value;
+                                  if ((comments[rfqNo] ?? "") !== val) {
+                                    saveComment(rfqNo, val);
+                                  }
+                                }}
+                                className="w-full resize-y rounded border border-gray-300 bg-white px-1.5 py-1 text-xs text-gray-900 focus:border-accent-red focus:outline-none"
+                              />
+                            ) : (
+                              <span className="text-gray-400 text-xs italic">
+                                {comments[rfqNo] ?? "🔒"}
+                              </span>
+                            )}
+                          </td>
+                        );
+                      }
                       const isDate = h.toLowerCase().includes("date");
                       const isNarrow = NARROW_COLS.has(h.toLowerCase());
                       const raw = row[h] ?? "";

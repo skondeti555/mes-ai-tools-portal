@@ -166,8 +166,14 @@ export default function QuotedRfqsPage() {
           },
           body: JSON.stringify({ rfqNumber: key, comment }),
         });
-        if (!res.ok) {
-          setCommentsError("Failed to save comment. Check your access code.");
+        if (res.status === 503) {
+          setCommentsError(
+            "Comments storage isn't set up yet — add the Upstash Redis integration in Vercel, then redeploy."
+          );
+        } else if (res.status === 401) {
+          setCommentsError("Saving requires the correct access code.");
+        } else if (!res.ok) {
+          setCommentsError("Failed to save comment. Please try again.");
         } else {
           setCommentsError("");
         }

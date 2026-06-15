@@ -15,7 +15,7 @@ Multi-tool web portal for MES Estimating Department. Currently hosts the **RFQ R
 | Tool | Route | Backend? | Description |
 |------|-------|----------|-------------|
 | RFQ Report Generator | `/rfq-report` | Yes (`POST /api/rfq_generate`) | Upload Excel → 3-step ETL pipeline → download ZIP of country reports |
-| Quoted RFQs Report | `/quoted-rfqs` | Parsing/export client-side (`xlsx` + `exceljs`); comments via `GET/POST /api/rfq_comments` | Upload Excel/CSV → filters rows with quoted suppliers → light/printable results table → styled Excel export. Each row has a persistent **Comment** column (team-shared, keyed by `RFQ #`, stored in Upstash Redis) gated behind a shared access code. |
+| Quoted RFQs Report | `/quoted-rfqs` | Parsing/export client-side (`xlsx` + `exceljs`); comments via `GET/POST /api/rfq_comments` | Upload Excel/CSV → filters rows with quoted suppliers → light/printable results table → styled Excel export. Each row has a persistent **Comment** column (team-shared, keyed by `RFQ #`, stored in Upstash Redis). Access code is optional (see env vars). |
 | Mexico Bar Stock Cost Calculator | `#` (placeholder) | TBD | Coming soon (`available: false` in tool grid) |
 
 ## Monorepo Structure & Deployment
@@ -27,7 +27,7 @@ This is a monorepo with `frontend/` (Next.js) and `api/` (Python) at the root.
 - **Python API functions:** Vercel auto-detects `api/*.py` as serverless functions. Dependencies listed in `api/requirements.txt`.
 - Push to GitHub → Vercel auto-deploys frontend + Python API functions.
 - **Environment variables (only for the Quoted RFQs comments feature):**
-  - `RFQ_COMMENTS_ACCESS_CODE` — shared code users type to view/edit comments. Server-side only; **never** prefix with `NEXT_PUBLIC_` (it must not ship to the browser).
+  - `RFQ_COMMENTS_ACCESS_CODE` — **optional** shared code users type to view/edit comments. If unset, comments are open (no password) — acceptable because only `RFQ #` + note are stored, never customer data. If set, both GET/POST require it. Server-side only; **never** prefix with `NEXT_PUBLIC_` (it must not ship to the browser).
   - Upstash Redis creds, auto-injected by the Vercel **Marketplace → Upstash for Redis** integration: `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (the `KV_REST_API_URL` / `KV_REST_API_TOKEN` aliases also work).
   - If these are unset the rest of the portal still works; the comments column simply stays empty/locked.
 

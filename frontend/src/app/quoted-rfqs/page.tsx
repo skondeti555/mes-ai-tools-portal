@@ -105,7 +105,9 @@ export default function QuotedRfqsPage() {
         headers: { "X-Access-Code": code },
       });
       if (res.status === 401) {
-        setCommentsError("Incorrect access code.");
+        // Only surface an error if the user actually typed a code; a silent 401
+        // on the initial empty-code probe just means a code is required.
+        if (code) setCommentsError("Incorrect access code.");
         return false;
       }
       if (!res.ok) {
@@ -122,16 +124,16 @@ export default function QuotedRfqsPage() {
     }
   }, []);
 
-  // On mount, auto-unlock if a code was previously saved.
+  // On mount, try to load comments. With no server-side code configured this
+  // succeeds with an empty code (open access); otherwise it returns 401 and the
+  // unlock box appears. A previously saved code is reused if present.
   useEffect(() => {
     const saved =
       typeof window !== "undefined"
         ? window.localStorage.getItem(ACCESS_CODE_KEY)
         : null;
-    if (saved) {
-      setAccessCode(saved);
-      loadComments(saved);
-    }
+    setAccessCode(saved ?? "");
+    loadComments(saved ?? "");
   }, [loadComments]);
 
   const handleUnlock = useCallback(async () => {
@@ -555,8 +557,8 @@ export default function QuotedRfqsPage() {
           {/* Comments unlock / status bar */}
           <div className="flex flex-wrap items-center gap-2 mb-3 text-sm">
             {commentsUnlocked ? (
-              <span className="inline-flex items-center gap-1.5 text-accent-teal">
-                <span aria-hidden>🔓</span> Comments unlocked — click a note to edit
+              <span className="inline-flex items-center gap-1.5 text-text-secondary">
+                <span aria-hidden>💬</span> Click a note to add or edit a comment
               </span>
             ) : (
               <>

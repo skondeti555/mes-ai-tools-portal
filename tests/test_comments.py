@@ -40,11 +40,11 @@ def configured(monkeypatch):
 
 # ── access control ─────────────────────────────────────────────
 
-def test_check_access_unconfigured_raises_503(monkeypatch):
+def test_check_access_open_when_unconfigured(monkeypatch):
+    # No access code configured -> open access, never raises.
     monkeypatch.delenv("RFQ_COMMENTS_ACCESS_CODE", raising=False)
-    with pytest.raises(HTTPException) as exc:
-        _check_access("anything")
-    assert exc.value.status_code == 503
+    assert _check_access("anything") is None
+    assert _check_access(None) is None
 
 
 def test_check_access_wrong_code_raises_401(monkeypatch):
@@ -66,6 +66,27 @@ def test_get_comments_rejects_without_code(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(get_comments(x_access_code=None))
     assert exc.value.status_code == 401
+
+
+# ── open access (no code configured) ───────────────────────────
+
+def test_get_comments_open_access(monkeypatch):
+    monkeypatch.delenv("RFQ_COMMENTS_ACCESS_CODE", raising=False)
+    fake = FakeRedis({"1001": "note"})
+    monkeypatch.setattr(comments, "_get_redis", lambda: fake)
+    resp = asyncio.run(get_comments(x_access_code=None))
+    import json
+
+    assert json.loads(resp.body) == {"1001": "note"}
+
+
+def test_set_comment_open_access(monkeypatch):
+    monkeypatch.delenv("RFQ_COMMENTS_ACCESS_CODE", raising=False)
+    fake = FakeRedis()
+    monkeypatch.setattr(comments, "_get_redis", lambda: fake)
+    asyncio.run(set_comment(CommentUpdate(rfqNumber="1002", comment="x"),
+                            x_access_code=None))
+    assert fake.store["1002"] == "x"
 
 
 # ── read / write ───────────────────────────────────────────────

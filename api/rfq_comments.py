@@ -4,11 +4,16 @@ Vercel Python Serverless Function: /api/rfq_comments
 Stores per-RFQ comments for the Quoted RFQs viewer in Upstash Redis as a
 single hash keyed by RFQ # (field = RFQ #, value = comment text).
 
-Both GET and POST require a shared access code passed in the X-Access-Code
-header. The code lives only in the RFQ_COMMENTS_ACCESS_CODE env var and is
-never shipped to the browser bundle, so comment text is never returned to
-anyone without it. See docs/CLAUDE.md "PUBLIC repo" rule — nothing here is
-committed; comments live only in Upstash, the code only in Vercel env vars.
+Access control is OPTIONAL and controlled by the RFQ_COMMENTS_ACCESS_CODE
+env var:
+  - unset  -> open access (no code needed). Fine for low-sensitivity data
+             like RFQ # + note, as long as customer names aren't stored.
+  - set    -> both GET and POST require that code in the X-Access-Code
+             header. The code lives only in the env var, never in the
+             browser bundle, so comment text is unreadable/unwritable
+             without it.
+See CLAUDE.md "PUBLIC repo" rule — nothing here is committed; comments live
+only in Upstash, the code (if any) only in Vercel env vars.
 """
 
 import hmac
@@ -42,10 +47,13 @@ def _get_redis():
 
 
 def _check_access(code: Optional[str]) -> None:
-    """Validate the shared access code. 503 if unset on the server, 401 on mismatch."""
+    """Validate the shared access code if one is configured.
+
+    No RFQ_COMMENTS_ACCESS_CODE set -> open access (return). Set -> 401 on mismatch.
+    """
     expected = os.environ.get("RFQ_COMMENTS_ACCESS_CODE")
     if not expected:
-        raise HTTPException(status_code=503, detail="Comments are not configured on the server.")
+        return  # open access — no code required
     if not code or not hmac.compare_digest(code, expected):
         raise HTTPException(status_code=401, detail="Invalid access code.")
 

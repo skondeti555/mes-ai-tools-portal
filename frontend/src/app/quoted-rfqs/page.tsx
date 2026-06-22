@@ -35,6 +35,34 @@ const NARROW_COLS = new Set([
   "invited supplier count",
 ]);
 
+// Short, friendly header labels for display. The data keys (and Excel export)
+// keep the original sheet names — only the on-screen <th> text is shortened so
+// narrow columns don't wrap their headers into 3-4 ugly lines.
+const COLUMN_LABELS: Record<string, string> = {
+  "quoted supplier count": "Quoted",
+  "invited supplier count": "Invited",
+  "open floated country": "Floated Country",
+};
+
+// Proportional column widths (percent of table width). Fixed layout normalizes
+// these, so they act as relative weights: the text-heavy Customer/Project columns
+// get the most room, numbers/dates the least. Keyed by lowercased header.
+const COL_WIDTHS: Record<string, string> = {
+  "rfq #": "6%",
+  "customer company": "14%",
+  "project name": "14%",
+  "quoted supplier count": "6%",
+  "invited supplier count": "6%",
+  commodity: "8%",
+  process: "8%",
+  "open floated country": "8%",
+  "need by date": "10%",
+  // Comment gets the most room — notes can be long ("India already quoted,
+  // waiting on China…"). The textarea also wraps and is resizable.
+  comment: "20%",
+};
+
+
 // Convert an Excel serial date number to a real JS Date.
 // Returns null when the value isn't a serial date (so callers can fall back to raw text).
 function excelSerialToDate(val: string | number): Date | null {
@@ -402,7 +430,7 @@ export default function QuotedRfqsPage() {
   }, [headers, rows, comments, rfqKey]);
 
   return (
-    <div className="max-w-[1100px] mx-auto">
+    <div className="max-w-[1240px] mx-auto">
       {/* Back navigation */}
       <Link
         href="/"
@@ -430,7 +458,7 @@ export default function QuotedRfqsPage() {
       </p>
 
       {/* File Upload */}
-      <section className="bg-card border border-border rounded-[10px] p-5 mb-4">
+      <section className="bg-card border border-border rounded-[10px] p-5 mb-4 max-w-3xl">
         <div className="flex items-center gap-3 mb-4">
           <span className="inline-flex items-center justify-center w-7 h-7 bg-accent-red text-white rounded-full text-sm font-bold">
             1
@@ -596,27 +624,10 @@ export default function QuotedRfqsPage() {
           </div>
 
           <div className="overflow-x-auto rounded-lg border border-gray-300 bg-white">
-            <table className="w-full text-sm text-left table-fixed">
+            <table className="w-full min-w-[960px] text-sm text-left table-fixed">
               <colgroup>
                 {headers.map((h) => (
-                  <col
-                    key={h}
-                    className={
-                      h === COMMENT_COL
-                        ? "w-[220px]"
-                        : NARROW_COLS.has(h.toLowerCase())
-                        ? "w-[70px]"
-                        : h.toLowerCase() === "rfq #"
-                        ? "w-[95px]"
-                        : h.toLowerCase() === "need by date"
-                        ? "w-[100px]"
-                        : h.toLowerCase() === "commodity" || h.toLowerCase() === "process"
-                        ? "w-[100px]"
-                        : h.toLowerCase() === "open floated country"
-                        ? "w-[90px]"
-                        : ""
-                    }
-                  />
+                  <col key={h} style={{ width: COL_WIDTHS[h.toLowerCase()] }} />
                 ))}
               </colgroup>
               <thead>
@@ -624,11 +635,12 @@ export default function QuotedRfqsPage() {
                   {headers.map((h) => (
                     <th
                       key={h}
-                      className={`px-2 py-2 text-gray-700 font-semibold text-xs uppercase tracking-wider ${
+                      title={h}
+                      className={`px-2 py-2.5 align-bottom text-gray-600 font-semibold text-[11px] uppercase tracking-wide leading-tight break-words ${
                         NARROW_COLS.has(h.toLowerCase()) ? "text-center" : ""
                       }`}
                     >
-                      {h}
+                      {COLUMN_LABELS[h.toLowerCase()] ?? h}
                     </th>
                   ))}
                 </tr>
@@ -649,16 +661,32 @@ export default function QuotedRfqsPage() {
                             {commentsUnlocked ? (
                               <textarea
                                 key={`${rfqNo}:${comments[rfqNo] ?? ""}`}
+                                // Auto-grow to fit the note: empty cells stay
+                                // compact, long notes expand so all text shows
+                                // without an inner scrollbar.
+                                ref={(el) => {
+                                  if (el) {
+                                    el.style.height = "auto";
+                                    // +border (offset-client) so border-box height
+                                    // fits content exactly with no inner scroll.
+                                    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+                                  }
+                                }}
                                 rows={2}
                                 defaultValue={comments[rfqNo] ?? ""}
                                 placeholder="Add a note…"
+                                onInput={(e) => {
+                                  const el = e.currentTarget;
+                                  el.style.height = "auto";
+                                  el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+                                }}
                                 onBlur={(e) => {
                                   const val = e.target.value;
                                   if ((comments[rfqNo] ?? "") !== val) {
                                     saveComment(rfqNo, val);
                                   }
                                 }}
-                                className="w-full resize-y rounded border border-gray-300 bg-white px-1.5 py-1 text-xs text-gray-900 focus:border-accent-red focus:outline-none"
+                                className="w-full resize-none overflow-hidden rounded border border-gray-300 bg-white px-2 py-1.5 text-[13px] leading-snug text-gray-900 min-h-[3.25rem] focus:border-accent-red focus:outline-none"
                               />
                             ) : (
                               <span className="text-gray-400 text-xs italic">
@@ -668,15 +696,16 @@ export default function QuotedRfqsPage() {
                           </td>
                         );
                       }
-                      const isDate = h.toLowerCase().includes("date");
-                      const isNarrow = NARROW_COLS.has(h.toLowerCase());
+                      const lower = h.toLowerCase();
+                      const isDate = lower.includes("date");
+                      const isNarrow = NARROW_COLS.has(lower);
                       const raw = row[h] ?? "";
                       const display = isDate ? excelDateToString(raw) : raw;
                       return (
                         <td
                           key={h}
-                          className={`px-2 py-2 text-gray-900 text-wrap break-words ${
-                            isNarrow ? "text-center" : ""
+                          className={`px-2 py-2 align-top text-gray-800 break-words overflow-hidden ${
+                            isNarrow ? "text-center tabular-nums" : ""
                           }`}
                         >
                           {display}

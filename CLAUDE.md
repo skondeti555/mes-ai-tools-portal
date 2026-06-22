@@ -30,6 +30,7 @@ This is a monorepo with `frontend/` (Next.js) and `api/` (Python) at the root.
   - `RFQ_COMMENTS_ACCESS_CODE` — **optional** shared code users type to view/edit comments. If unset, comments are open (no password) — acceptable because only `RFQ #` + note are stored, never customer data. If set, both GET/POST require it. Server-side only; **never** prefix with `NEXT_PUBLIC_` (it must not ship to the browser).
   - Upstash Redis creds, auto-injected by the Vercel **Marketplace → Upstash for Redis** integration: `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (the `KV_REST_API_URL` / `KV_REST_API_TOKEN` aliases also work).
   - If these are unset the rest of the portal still works; the comments column simply stays empty/locked.
+  - **Where env vars live:** they are configured at the **Vercel project level** (project `mes-ai-tools-portal`), independent of the code. Merging to `main` ships code but does **not** set/change env vars, and edits to them only take effect on the **next deployment** (redeploy after changing). The `KV_REST_API_*` vars are currently supplied by the connected Upstash store. Confirm via Vercel dashboard → Settings → Environment Variables (or Integrations), or `vercel env ls` (requires `vercel login`).
 
 ## Local Development
 
@@ -37,8 +38,10 @@ This is a monorepo with `frontend/` (Next.js) and `api/` (Python) at the root.
 ```bash
 poetry install
 poetry run pytest                    # run tests (56 tests)
-poetry run uvicorn api.rfq_generate:app --reload --port 8000  # local API server
+poetry run uvicorn api.rfq_generate:app --reload --port 8000  # local API server (RFQ generator)
+poetry run uvicorn api.rfq_comments:app --reload --port 8000  # local comments API (separate ASGI app)
 ```
+Note: each `api/*.py` is its own ASGI app, so run the one whose endpoint you need (the frontend dev rewrite sends all `/api/*` to port 8000). **Bare uvicorn does not load `.env`**, so the comments store is unconfigured → `GET /api/rfq_comments` returns `{}` and `POST` returns 503 (the UI works, but nothing persists). Use this mode to test the UI without touching production data.
 
 ### Frontend (Next.js)
 ```bash
@@ -53,6 +56,7 @@ Note: `frontend/next.config.ts` rewrites `/api/*` to `http://localhost:8000` dur
 npm i -g vercel
 vercel dev    # runs both frontend + Python API functions
 ```
+> ⚠️ `vercel dev` loads the root `.env`, whose `KV_REST_API_*` creds point to the **live, shared** Upstash database — comments you add/edit/delete locally write to the **same data production uses** (there is no separate dev DB). Use the bare uvicorn server above to exercise the UI without touching prod.
 
 ## Key Files
 - `api/lib/rfq_pipeline.py` — Core ETL logic (3-step pipeline: build CSV → split by country → format templates)
@@ -67,7 +71,7 @@ vercel dev    # runs both frontend + Python API functions
 - `frontend/src/app/page.tsx` — Portal landing page (tool grid, 3 tools defined)
 - `frontend/src/app/layout.tsx` — Root layout (header, MES branding, dark theme)
 - `frontend/src/app/rfq-report/page.tsx` — RFQ Report Generator tool page
-- `frontend/src/app/quoted-rfqs/page.tsx` — Quoted RFQs Report tool page (client-side only, no backend call)
+- `frontend/src/app/quoted-rfqs/page.tsx` — Quoted RFQs Report tool page (client-side parsing/export; per-RFQ comments call `GET/POST /api/rfq_comments`). UI notes: comments **auto-save on blur** (no Save button) and update optimistically; the results table uses short on-screen header labels (e.g. "Quoted", "Invited") while the **Excel export keeps the full sheet column names**; the note field **auto-grows** to fit long notes; columns use proportional widths with `break-words` so text never overflows into the neighbor.
 - `tests/` — Python test suite (test_helpers, test_pipeline, test_template_helpers)
 - `package.json` (root) — Vercel framework detection shim (not the real frontend package.json)
 - `vercel.json` — Vercel build/routing config

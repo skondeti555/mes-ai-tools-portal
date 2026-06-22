@@ -16,7 +16,7 @@ export default function RootLayout({
       <body>
         <div className="min-h-screen">
           <header className="border-b-2 border-accent-red px-6 py-5">
-            <div className="max-w-5xl mx-auto flex items-center gap-4">
+            <div className="max-w-7xl mx-auto flex items-center gap-4">
               <div className="flex-shrink-0">
                 <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
                   <rect width="36" height="36" rx="8" fill="#e63946" />
@@ -36,7 +36,7 @@ export default function RootLayout({
               </div>
             </div>
           </header>
-          <main className="max-w-5xl mx-auto px-6 py-8">{children}</main>
+          <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
         </div>
       </body>
     </html>

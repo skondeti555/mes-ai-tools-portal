@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
 
@@ -10,6 +10,11 @@ interface RowData {
 
 const QUOTED_COL = "Quoted Supplier Count";
 const HEADER_SCAN_ROWS = 80;
+
+// Synthetic column (not present in the uploaded sheet) holding the per-RFQ note.
+const COMMENT_COL = "Comment";
+// localStorage key for the shared access code so users don't re-enter it each visit.
+const ACCESS_CODE_KEY = "quotedRfqsAccessCode";
 
 // Columns to display (matching original Electron app) + Process
 const DISPLAY_COLS = [
@@ -29,6 +34,34 @@ const NARROW_COLS = new Set([
   "quoted supplier count",
   "invited supplier count",
 ]);
+
+// Short, friendly header labels for display. The data keys (and Excel export)
+// keep the original sheet names — only the on-screen <th> text is shortened so
+// narrow columns don't wrap their headers into 3-4 ugly lines.
+const COLUMN_LABELS: Record<string, string> = {
+  "quoted supplier count": "Quoted",
+  "invited supplier count": "Invited",
+  "open floated country": "Floated Country",
+};
+
+// Proportional column widths (percent of table width). Fixed layout normalizes
+// these, so they act as relative weights: the text-heavy Customer/Project columns
+// get the most room, numbers/dates the least. Keyed by lowercased header.
+const COL_WIDTHS: Record<string, string> = {
+  "rfq #": "6%",
+  "customer company": "14%",
+  "project name": "14%",
+  "quoted supplier count": "6%",
+  "invited supplier count": "6%",
+  commodity: "8%",
+  process: "8%",
+  "open floated country": "8%",
+  "need by date": "10%",
+  // Comment gets the most room — notes can be long ("India already quoted,
+  // waiting on China…"). The textarea also wraps and is resizable.
+  comment: "20%",
+};
+
 
 // Convert an Excel serial date number to a real JS Date.
 // Returns null when the value isn't a serial date (so callers can fall back to raw text).
@@ -81,6 +114,103 @@ export default function QuotedRfqsPage() {
   const [errorMsg, setErrorMsg] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Per-RFQ comments (RFQ # -> text), shared across the team via the backend.
+  const [comments, setComments] = useState<Record<string, string>>({});
+  const [accessCode, setAccessCode] = useState("");
+  const [codeInput, setCodeInput] = useState("");
+  const [commentsUnlocked, setCommentsUnlocked] = useState(false);
+  const [commentsError, setCommentsError] = useState("");
+
+  // The actual header name for the RFQ # column (casing comes from the sheet).
+  const rfqKey = headers.find((h) => h.toLowerCase() === "rfq #");
+
+  // Fetch all comments with the given code. Returns true on success (valid code).
+  const loadComments = useCallback(async (code: string): Promise<boolean> => {
+    setCommentsError("");
+    try {
+      const res = await fetch("/api/rfq_comments", {
+        headers: { "X-Access-Code": code },
+      });
+      if (res.status === 401) {
+        // Only surface an error if the user actually typed a code; a silent 401
+        // on the initial empty-code probe just means a code is required.
+        if (code) setCommentsError("Incorrect access code.");
+        return false;
+      }
+      if (!res.ok) {
+        setCommentsError("Could not load comments. Try again later.");
+        return false;
+      }
+      const data: Record<string, string> = await res.json();
+      setComments(data ?? {});
+      setCommentsUnlocked(true);
+      return true;
+    } catch {
+      setCommentsError("Could not reach the comments server.");
+      return false;
+    }
+  }, []);
+
+  // On mount, try to load comments. With no server-side code configured this
+  // succeeds with an empty code (open access); otherwise it returns 401 and the
+  // unlock box appears. A previously saved code is reused if present.
+  useEffect(() => {
+    const saved =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(ACCESS_CODE_KEY)
+        : null;
+    setAccessCode(saved ?? "");
+    loadComments(saved ?? "");
+  }, [loadComments]);
+
+  const handleUnlock = useCallback(async () => {
+    const code = codeInput.trim();
+    if (!code) return;
+    const ok = await loadComments(code);
+    if (ok) {
+      setAccessCode(code);
+      window.localStorage.setItem(ACCESS_CODE_KEY, code);
+      setCodeInput("");
+    }
+  }, [codeInput, loadComments]);
+
+  // Persist a single comment (blank clears it). Optimistically updates local state.
+  const saveComment = useCallback(
+    async (rfqNumber: string, comment: string) => {
+      const key = String(rfqNumber);
+      setComments((prev) => {
+        const next = { ...prev };
+        if (comment.trim()) next[key] = comment;
+        else delete next[key];
+        return next;
+      });
+      try {
+        const res = await fetch("/api/rfq_comments", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Access-Code": accessCode,
+          },
+          body: JSON.stringify({ rfqNumber: key, comment }),
+        });
+        if (res.status === 503) {
+          setCommentsError(
+            "Comments storage isn't set up yet — add the Upstash Redis integration in Vercel, then redeploy."
+          );
+        } else if (res.status === 401) {
+          setCommentsError("Saving requires the correct access code.");
+        } else if (!res.ok) {
+          setCommentsError("Failed to save comment. Please try again.");
+        } else {
+          setCommentsError("");
+        }
+      } catch {
+        setCommentsError("Failed to save comment — server unreachable.");
+      }
+    },
+    [accessCode]
+  );
 
   const parseFile = useCallback((f: File) => {
     setLoading(true);
@@ -153,6 +283,8 @@ export default function QuotedRfqsPage() {
         const displayHeaders = availableDisplayCols.map(
           (col) => headerRow.find((h) => h.toLowerCase() === col.toLowerCase())!
         );
+        // Append the synthetic Comment column (not present in the uploaded sheet).
+        displayHeaders.push(COMMENT_COL);
 
         setHeaders(displayHeaders);
         setRows(filtered);
@@ -234,6 +366,9 @@ export default function QuotedRfqsPage() {
     // Data rows
     rows.forEach((row) => {
       const values = headers.map((h) => {
+        if (h === COMMENT_COL) {
+          return rfqKey ? comments[String(row[rfqKey] ?? "")] ?? "" : "";
+        }
         const raw = row[h] ?? "";
         if (h.toLowerCase().includes("date")) {
           return excelSerialToDate(raw) ?? raw;
@@ -261,10 +396,14 @@ export default function QuotedRfqsPage() {
       const header = headers[i] ?? "";
       let maxLen = header.length;
       rows.forEach((row) => {
-        const raw = row[header] ?? "";
-        const text = header.toLowerCase().includes("date")
-          ? excelDateToString(raw)
-          : String(raw);
+        let text: string;
+        if (header === COMMENT_COL) {
+          text = rfqKey ? comments[String(row[rfqKey] ?? "")] ?? "" : "";
+        } else if (header.toLowerCase().includes("date")) {
+          text = excelDateToString(row[header] ?? "");
+        } else {
+          text = String(row[header] ?? "");
+        }
         if (text.length > maxLen) maxLen = text.length;
       });
       col.width = Math.min(Math.max(maxLen + 2, 10), 50);
@@ -288,10 +427,10 @@ export default function QuotedRfqsPage() {
     a.download = `Quoted_RFQs_${stamp}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [headers, rows]);
+  }, [headers, rows, comments, rfqKey]);
 
   return (
-    <div className="max-w-[1100px] mx-auto">
+    <div className="max-w-[1240px] mx-auto">
       {/* Back navigation */}
       <Link
         href="/"
@@ -319,7 +458,7 @@ export default function QuotedRfqsPage() {
       </p>
 
       {/* File Upload */}
-      <section className="bg-card border border-border rounded-[10px] p-5 mb-4">
+      <section className="bg-card border border-border rounded-[10px] p-5 mb-4 max-w-3xl">
         <div className="flex items-center gap-3 mb-4">
           <span className="inline-flex items-center justify-center w-7 h-7 bg-accent-red text-white rounded-full text-sm font-bold">
             1
@@ -449,26 +588,46 @@ export default function QuotedRfqsPage() {
             </button>
           </div>
 
+          {/* Comments unlock / status bar */}
+          <div className="flex flex-wrap items-center gap-2 mb-3 text-sm">
+            {commentsUnlocked ? (
+              <span className="inline-flex items-center gap-1.5 text-text-secondary">
+                <span aria-hidden>💬</span> Click a note to add or edit a comment
+              </span>
+            ) : (
+              <>
+                <span className="text-text-secondary">
+                  Enter the team access code to view &amp; edit comments:
+                </span>
+                <input
+                  type="password"
+                  value={codeInput}
+                  onChange={(e) => setCodeInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleUnlock();
+                  }}
+                  placeholder="Access code"
+                  className="rounded border border-border bg-dark px-2 py-1 text-sm text-text-primary focus:border-accent-red focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleUnlock}
+                  className="bg-accent-red hover:bg-accent-red-hover text-white text-sm font-semibold px-3 py-1 rounded-md transition-colors"
+                >
+                  Unlock
+                </button>
+              </>
+            )}
+            {commentsError && (
+              <span className="text-error">{commentsError}</span>
+            )}
+          </div>
+
           <div className="overflow-x-auto rounded-lg border border-gray-300 bg-white">
-            <table className="w-full text-sm text-left table-fixed">
+            <table className="w-full min-w-[960px] text-sm text-left table-fixed">
               <colgroup>
                 {headers.map((h) => (
-                  <col
-                    key={h}
-                    className={
-                      NARROW_COLS.has(h.toLowerCase())
-                        ? "w-[70px]"
-                        : h.toLowerCase() === "rfq #"
-                        ? "w-[95px]"
-                        : h.toLowerCase() === "need by date"
-                        ? "w-[100px]"
-                        : h.toLowerCase() === "commodity" || h.toLowerCase() === "process"
-                        ? "w-[100px]"
-                        : h.toLowerCase() === "open floated country"
-                        ? "w-[90px]"
-                        : ""
-                    }
-                  />
+                  <col key={h} style={{ width: COL_WIDTHS[h.toLowerCase()] }} />
                 ))}
               </colgroup>
               <thead>
@@ -476,11 +635,12 @@ export default function QuotedRfqsPage() {
                   {headers.map((h) => (
                     <th
                       key={h}
-                      className={`px-2 py-2 text-gray-700 font-semibold text-xs uppercase tracking-wider ${
+                      title={h}
+                      className={`px-2 py-2.5 align-bottom text-gray-600 font-semibold text-[11px] uppercase tracking-wide leading-tight break-words ${
                         NARROW_COLS.has(h.toLowerCase()) ? "text-center" : ""
                       }`}
                     >
-                      {h}
+                      {COLUMN_LABELS[h.toLowerCase()] ?? h}
                     </th>
                   ))}
                 </tr>
@@ -494,15 +654,58 @@ export default function QuotedRfqsPage() {
                     }`}
                   >
                     {headers.map((h) => {
-                      const isDate = h.toLowerCase().includes("date");
-                      const isNarrow = NARROW_COLS.has(h.toLowerCase());
+                      if (h === COMMENT_COL) {
+                        const rfqNo = rfqKey ? String(row[rfqKey] ?? "") : "";
+                        return (
+                          <td key={h} className="px-2 py-1.5 align-top">
+                            {commentsUnlocked ? (
+                              <textarea
+                                key={`${rfqNo}:${comments[rfqNo] ?? ""}`}
+                                // Auto-grow to fit the note: empty cells stay
+                                // compact, long notes expand so all text shows
+                                // without an inner scrollbar.
+                                ref={(el) => {
+                                  if (el) {
+                                    el.style.height = "auto";
+                                    // +border (offset-client) so border-box height
+                                    // fits content exactly with no inner scroll.
+                                    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+                                  }
+                                }}
+                                rows={2}
+                                defaultValue={comments[rfqNo] ?? ""}
+                                placeholder="Add a note…"
+                                onInput={(e) => {
+                                  const el = e.currentTarget;
+                                  el.style.height = "auto";
+                                  el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+                                }}
+                                onBlur={(e) => {
+                                  const val = e.target.value;
+                                  if ((comments[rfqNo] ?? "") !== val) {
+                                    saveComment(rfqNo, val);
+                                  }
+                                }}
+                                className="w-full resize-none overflow-hidden rounded border border-gray-300 bg-white px-2 py-1.5 text-[13px] leading-snug text-gray-900 min-h-[3.25rem] focus:border-accent-red focus:outline-none"
+                              />
+                            ) : (
+                              <span className="text-gray-400 text-xs italic">
+                                {comments[rfqNo] ?? "🔒"}
+                              </span>
+                            )}
+                          </td>
+                        );
+                      }
+                      const lower = h.toLowerCase();
+                      const isDate = lower.includes("date");
+                      const isNarrow = NARROW_COLS.has(lower);
                       const raw = row[h] ?? "";
                       const display = isDate ? excelDateToString(raw) : raw;
                       return (
                         <td
                           key={h}
-                          className={`px-2 py-2 text-gray-900 text-wrap break-words ${
-                            isNarrow ? "text-center" : ""
+                          className={`px-2 py-2 align-top text-gray-800 break-words overflow-hidden ${
+                            isNarrow ? "text-center tabular-nums" : ""
                           }`}
                         >
                           {display}
